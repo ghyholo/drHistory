@@ -4,6 +4,8 @@ import sys
 import re
 import os
 import argparse
+from dotenv import load_dotenv
+import os
 
 import requests
 from pathlib import Path
@@ -30,30 +32,70 @@ from llama_index.core.schema import BaseNode, ImageNode, MetadataMode
 from custom.history_sentence_window import HistorySentenceWindowNodeParser
 from custom.llms.QwenLLM import QwenUnofficial
 from custom.llms.GeminiLLM import Gemini
-from custom.llms.proxy_model import ProxyModel
 from pymilvus import MilvusClient
 
 QA_PROMPT_TMPL_STR = (
-    "请你仔细阅读相关内容，结合历史资料进行回答,每一条史资料使用'出处：《书名》原文内容'的形式标注 (如果回答请清晰无误地引用原文,先给出回答，再贴上对应的原文，使用《书名》[]对原文进行标识),，如果发现资料无法得到答案，就回答不知道 \n"
-    "搜索的相关历史资料如下所示.\n"
-    "---------------------\n"
-    "{context_str}\n"
-    "---------------------\n"
-    "问题: {query_str}\n"
-    "答案: "
+  """
+你是一名严谨的中国历史问答智能体。
+
+【基本原则】
+1. 你只依据检索到的历史原文资料回答问题，不得凭空编造史料。
+2. 你可以对这些史料进行概括、整理和逻辑推理，但所有结论必须有史料原文作为支撑。
+3. 每当你使用史料支持自己的回答时，必须给出清晰的引用，格式为：
+   出处：《书名》[原文内容]
+4. 如果资料不足以支持任何可靠结论，请明确回答“资料不足，无法判断”，而不是随意猜测。
+5. 你不需要“编造新的史料”，只能引用用户提供语料中的原文。
+"""
+
 )
 
-QA_SYSTEM_PROMPT = "你是一个严谨的历史知识问答智能体，你会仔细阅读历史材料并给出准确的回答,你的回答都会非常准确，因为你在回答的之后，使用在《书名》[]内给出原文用来支撑你回答的证据.并且你会在开头说明原文是否有回答所需的知识"
+QA_SYSTEM_PROMPT = (
+    """
+请根据下面检索到的历史资料回答问题。
+
+【回答要求】
+1. 优先直接从原文中找出可以回答问题的内容。
+2. 对于每一条关键论据，请使用“出处：《书名》[原文内容]”的形式给出原文引用。
+3. 你可以在引用的基础上做简要说明或归纳，但不要虚构任何原文中不存在的内容。
+4. 如果这些资料无法回答问题，请直接说“资料不足，无法判断”。
+
+-------------------- 检索到的历史资料 --------------------
+{context_str}
+--------------------------------------------------------
+
+问题：{query_str}
+
+请给出你的回答（先给出结论，再列出对应的原文引用）：
+"""
+)
+
 
 REFINE_PROMPT_TMPL_STR = ( 
-    "你是一个历史知识回答修正机器人，你严格按以下方式工作"
-    "1.只有原答案为不知道时才进行修正,否则输出原答案的内容\n"
-    "2.修正的时候为了体现你的精准和客观，你非常喜欢使用《书名》[]将原文展示出来.\n"
-    "3.如果感到疑惑的时候，就用原答案的内容回答。"
-    "新的知识: {context_msg}\n"
-    "问题: {query_str}\n"
-    "原答案: {existing_answer}\n"
-    "新答案: "
+    """
+    你是一名历史回答修正助手，现在有新的检索资料可以用来检查和改进原答案。
+
+【你的任务】
+1. 通读“新的检索资料”，判断其中是否包含能纠正原答案错误、或补充更直接证据的内容。
+2. 如果新资料提供了更清晰的史料支撑，请在原答案的基础上进行修正或补充。
+3. 修正后的答案同样必须给出对应的史料原文引用，格式为：
+   出处：《书名》[原文内容]
+4. 你仍然不能编造史料，只能引用文本中真实存在的内容。
+5. 如果新资料并未改变结论，只是增加了一些细节，可以在保持原结论的前提下补充说明；
+   如果即便加入新资料仍然无法得出可靠结论，请统一回答“资料不足，无法判断”。
+
+新的检索资料：
+--------------------
+{context_msg}
+--------------------
+
+问题：
+{query_str}
+
+原答案：
+{existing_answer}
+
+请给出经过修正或确认后的“新答案”（包含结论 + 对应的原文引用）：
+"""
 )
 
 def is_valid_url(url):
@@ -118,6 +160,9 @@ class Executor:
 
 class MilvusExecutor(Executor):
     def __init__(self, config):
+        # 确保加载 .env
+        load_dotenv()
+        
         self.index = None
         self.query_engine = None
         self.config = config
@@ -134,15 +179,43 @@ class MilvusExecutor(Executor):
             llm = QwenUnofficial(temperature=config.llm.temperature, model=config.llm.name, max_tokens=2048)
         elif config.llm.name.find("gemini") != -1:
             llm = Gemini(temperature=config.llm.temperature, model_name=config.llm.name, max_tokens=2048)
-        elif 'proxy_model' in config.llm:
-            llm = ProxyModel(model_name=config.llm.name, api_base=config.llm.api_base, api_key=config.llm.api_key,
-                             temperature=config.llm.temperature,  max_tokens=2048)
-            print(f"使用{config.llm.name},PROXY_SERVER_URL为{config.llm.api_base},PROXY_API_KEY为{config.llm.api_key}")
         else:
-            api_base = None
-            if 'api_base' in config.llm:
-                api_base = config.llm.api_base
-            llm = OpenAI(api_base = api_base, temperature=config.llm.temperature, model=config.llm.name, max_tokens=2048)
+            # 从 .env 或 config 读取
+            api_key = os.getenv('OPENAI_API_KEY') or (config.llm.api_key if hasattr(config.llm, 'api_key') else None)
+            api_base = os.getenv('OPENAI_BASE_URL') or (config.llm.api_base if hasattr(config.llm, 'api_base') else None)
+
+            if not api_key:
+                raise ValueError("缺少 OPENAI_API_KEY 环境变量，请在 .env 文件中添加")
+
+            if not api_base:
+                api_base = "https://api.bianxie.ai/v1"
+                print("[Warning] 未设置 OPENAI_BASE_URL，已回退到默认 https://api.bianxie.ai/v1")
+
+            # 强制设置多种环境/模块变量，确保 openai 客户端使用第三方 base url
+            os.environ['OPENAI_API_BASE'] = api_base
+            os.environ['OPENAI_API_URL'] = api_base
+            os.environ['OPENAI_BASE_URL'] = api_base
+            try:
+                import openai as _openai
+                # 兼容不同 openai 客户端版本的属性名
+                setattr(_openai, 'api_base', api_base)
+                setattr(_openai, 'base_url', api_base)
+                setattr(_openai, 'api_base_url', api_base)
+            except Exception:
+                # 如果没安装 openai 或无法设置，则跳过
+                pass
+
+            # 支持从 .env 指定实际供应商模型名
+            actual_model = os.getenv('ACTUAL_MODEL_NAME', config.llm.name)
+
+            llm = OpenAI(
+                api_key=api_key,
+                api_base=api_base,
+                temperature=config.llm.temperature,
+                model=actual_model,
+                max_tokens=2048
+            )
+            print(f"[MilvusExecutor] 使用 API Base: {api_base} , 模型: {actual_model}")
 
         Settings.llm = llm
         Settings.embed_model = embed_model
@@ -246,6 +319,8 @@ class MilvusExecutor(Executor):
 
 class PipelineExecutor(Executor):
     def __init__(self, config):
+        load_dotenv()
+        
         self.ZILLIZ_CLUSTER_ID = os.getenv("ZILLIZ_CLUSTER_ID")
         self.ZILLIZ_TOKEN = os.getenv("ZILLIZ_TOKEN")
         self.ZILLIZ_PROJECT_ID = os.getenv("ZILLIZ_PROJECT_ID") 
@@ -259,8 +334,7 @@ class PipelineExecutor(Executor):
         if len(self.ZILLIZ_TOKEN) == 0:
             print('ZILLIZ_TOKEN 参数为空')
             exit()
-        
-        self.config = config
+
         self._debug = False
 
         if config.llm.name.find("qwen") != -1:
@@ -268,10 +342,23 @@ class PipelineExecutor(Executor):
         elif config.llm.name.find("gemini") != -1:
             llm = Gemini(model_name=config.llm.name, temperature=config.llm.temperature, max_tokens=2048)
         else:
-            api_base = None
-            if 'api_base' in config.llm:
-                api_base = config.llm.api_base
-            llm = OpenAI(api_base = api_base, temperature=config.llm.temperature, model=config.llm.name, max_tokens=2048)
+            # 从 .env 文件读取第三方 API 配置
+            api_key = os.getenv('OPENAI_API_KEY')
+            api_base = os.getenv('OPENAI_API_BASE')
+            
+            if not api_key:
+                raise ValueError("缺少 OPENAI_API_KEY 环境变量")
+            if not api_base:
+                raise ValueError("缺少 OPENAI_API_BASE 环境变量")
+            
+            llm = OpenAI(
+                api_key=api_key,
+                api_base=api_base,
+                temperature=config.llm.temperature,
+                model=config.llm.name,
+                max_tokens=2048
+            )
+            print(f"使用第三方 API: {api_base}")
 
         Settings.llm = llm
         self._initialize_pipeline()

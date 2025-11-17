@@ -1,0 +1,107 @@
+###############################
+# Python
+###############################
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pkl
+*.pickle
+*.log
+*.tmp
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_temp*
+
+###############################
+# VSCode
+###############################
+.vscode/
+.code-workspace
+
+###############################
+# OS / Editor files
+###############################
+.DS_Store
+Thumbs.db
+
+###############################
+# Docker
+###############################
+# Ignore Docker build cache
+docker-build/
+docker-data/
+
+# Ignore Docker volumes
+db/
+volumes/
+data/
+
+# Ignore container logs
+*.log
+
+###############################
+# MinIO (Object Storage)
+###############################
+# MinIO system metadata
+**/.minio.sys/
+**/minio.sys/
+**/.minio/
+
+# MinIO bucket data (不要提交实际对象)
+*.minio
+*.parquet
+*.bin
+*.ldb
+
+###############################
+# Milvus (Vector DB)
+###############################
+# Milvus runtime data
+milvus/
+**/milvus/
+**/wal/
+**/db/
+
+# Milvus storage/logs
+logs/
+wal/
+snapshots/
+
+###############################
+# etcd
+###############################
+**/etcd/
+**/default.etcd/
+*.etcd
+
+###############################
+# Cache / Temp
+###############################
+cache/
+tmp/
+temp/
+*.cache
+*.swp
+*.swo
+
+###############################
+# Node (如果以后加前端)
+###############################
+node_modules/
+npm-debug.log
+yarn-error.log
+
+###############################
+# Env
+###############################
+.env
+.env.*
+*.secret
+*.keys

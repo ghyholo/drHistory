@@ -1,5 +1,8 @@
 from executor import MilvusExecutor
 from executor import PipelineExecutor
+from dotenv import load_dotenv
+load_dotenv()
+
 
 import yaml
 from easydict import EasyDict
